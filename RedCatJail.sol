@@ -45,7 +45,6 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
         emit DepositMoney(msg.sender, msg.value);
     }
 
-    // 借錢
     function borrowMoney(uint[] calldata tokenIds) external nonReentrant {
         require(borrowOpen, "market not open");
         require(RedCat.balanceOf(msg.sender) - tokenIds.length >= 1, "hold at least one");
@@ -68,7 +67,6 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
         }
     }
 
-    // 贖回
     function redemptionRedCat(uint tokenId) external payable {
         RedCatOrder memory redCatOrder = jail[address(this)][tokenId];
         require(redCatOrder.borrowAddress == msg.sender, "not yours");
@@ -96,7 +94,6 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
         }
     }
 
-    // 確認拋棄
     function confirmAbandon() external {
         uint256[] memory jailRedCat = RedCat.walletOfOwner(address(this));
 
@@ -110,7 +107,6 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
         }
     }
     
-    // 購買
     function buyRedCat(uint tokenId) external payable nonReentrant {
         require(saleOpen, "market not open");
         uint salePrice = abandon[address(this)][tokenId].salePrice;
