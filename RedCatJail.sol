@@ -1,22 +1,13 @@
-/**
-This contract redemption has nothing to do with RMM's own team
-
-Due to RMM's malicious lock-up of the holder's assets, the holder cannot live a normal life
-
-With this, RedCat holders can temporarily use RedCat to borrow money
-*/
-
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.18;
 
 import './Ownable.sol';
 import "./IRedCat.sol";
-import "./MerkleProof.sol";
 import "./IERC721TokenReceiver.sol";
 import "./ReentrancyGuard.sol";
 
-struct RedCatInfo {
-    address owner;
+struct RedCatOrder {
+    address borrowAddress;
     uint borrowMoney;
     uint borrowTime;
     uint salePrice;
@@ -24,30 +15,29 @@ struct RedCatInfo {
 
 contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
 
-    using MerkleProof for bytes32[];
-
     // constant
-    IRedCat constant RedCat = IRedCat(0xddaAd340b0f1Ef65169Ae5E41A8b10776a75482d);
+    IRedCat immutable RedCat;
 
     // attributes
     bool public saleOpen = false;
     bool public borrowOpen = false;
-    uint public borrowMoney = 0.2 ether;
-    uint public redemptionTime = 90 days;
-    uint public jailTime = 180 days;
+    uint public borrowPrice = 0.2 ether;
+    uint public mintPrice = 0.3 ether;
     uint public holdTime = 60 days;
-    bytes32 public merkleRoot;
+    uint public redemptionTime = 90 days;
+    uint public abandonTime = 180 days;
 
-    uint[] jailRedCat;
-    uint[] abandonRedCat;
-    mapping(uint tokenId => RedCatInfo) public jail;
-    mapping(uint tokenId => RedCatInfo) public abandon;
+    mapping(address => mapping(uint tokenId => RedCatOrder)) jail;
+    mapping(address => mapping(uint tokenId => RedCatOrder)) abandon;
 
     // event
-    event VictimBorrowMoney(address borrower, uint borrowMoney, uint tokenId);
+    event BorrowMoney(address borrower, uint borrowMoney, uint tokenId);
     event DepositMoney(address depositor, uint money);
+    event BuyRedCat(address buyer, uint tokenId, uint money);
+    event RedemptionRedCat(address redeemer, uint tokenId, uint money);
 
-    constructor() payable {
+    constructor(address RedCatAddress) payable {
+        RedCat = IRedCat(RedCatAddress);
         emit DepositMoney(msg.sender, msg.value);
     }
 
@@ -56,98 +46,114 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
     }
 
     // 借錢
-    function victimBorrowMoneyWhiteList(uint[] calldata tokenIds, bytes32[] calldata _proof) external nonReentrant {
+    function borrowMoney(uint[] calldata tokenIds) external nonReentrant {
+        require(borrowOpen, "market not open");
         require(RedCat.balanceOf(msg.sender) - tokenIds.length >= 1, "hold at least one");
-        require(verify(_proof), "address is not on the whitelist");
-    
+
         for(uint i = 0; i < tokenIds.length; i++) {
             (uint tokenId, uint buyTime) = RedCat.getBuyTime(tokenIds[i]);
-            (, bool ban) = RedCat.getBan(tokenIds[i]);
-            
-            require(block.timestamp - buyTime >= holdTime, "holding time too short");
-            require(RedCat.ownerOf(tokenId) == msg.sender, "RedCat is not yours");
-            require(!ban, "RedCat has been banned");
-
-            RedCat.safeTransferFrom(msg.sender, address(this), tokenId);
-            (bool success, ) = msg.sender.call{value: borrowMoney}("");
-            require(success, "failed");
-
-            jail[tokenId] = RedCatInfo(msg.sender, borrowMoney, block.timestamp, 0);
-            jailRedCat.push(tokenId);
-            emit VictimBorrowMoney(msg.sender, borrowMoney, tokenId);
-        }
-    }
-
-    // 借錢
-    function victimBorrowMoney(uint[] calldata tokenIds) external nonReentrant {
-        require(RedCat.balanceOf(msg.sender) - tokenIds.length >= 1, "hold at least one");
-    
-        for(uint i = 0; i < tokenIds.length; i++) {
-            (uint tokenId, uint buyTime) = RedCat.getBuyTime(tokenIds[i]);
-            (, bool ban) = RedCat.getBan(tokenIds[i]);
+            (, bool ban) = RedCat.getBan(tokenId);
 
             require(block.timestamp - buyTime >= holdTime, "holding time too short");
             require(RedCat.ownerOf(tokenId) == msg.sender, "RedCat is not yours");
             require(!ban, "RedCat has been banned");
 
             RedCat.safeTransferFrom(msg.sender, address(this), tokenId);
-            (bool success, ) = msg.sender.call{value: borrowMoney}("");
-            require(success, "failed");
+            jail[address(this)][tokenId] = RedCatOrder(msg.sender, borrowPrice, block.timestamp, 0);
 
-            jail[tokenId] = RedCatInfo(msg.sender, borrowMoney, block.timestamp, 0);
-            jailRedCat.push(tokenId);
-            emit VictimBorrowMoney(msg.sender, borrowMoney, tokenId);
+            (bool success, ) = msg.sender.call{value: borrowPrice}("");
+            require(success, "failed");
+           
+            emit BorrowMoney(msg.sender, borrowPrice, tokenId);
         }
     }
 
     // 贖回
-    function redemptionRedCat() external payable {
-        //判斷是否超過遺棄時間
-        //買回去
-        //算利息
-    }
+    function redemptionRedCat(uint tokenId) external payable {
+        RedCatOrder memory redCatOrder = jail[address(this)][tokenId];
+        require(redCatOrder.borrowAddress == msg.sender, "not yours");
+        require(!getAbandomTime(tokenId), "has been abandoned");
 
-    // 購買
-    function buyRedCat() external payable {
-        require(saleOpen, "market not open");
+        if(!getRedemptionTime(tokenId)) {
+            require(msg.value >= redCatOrder.borrowMoney, "wrong amount");
 
+            RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
+            delete jail[address(this)][tokenId];
+
+            emit RedemptionRedCat(msg.sender, tokenId, redCatOrder.borrowMoney);
+        } else {
+            uint totalAmount = getTotalAmount(tokenId);
+            
+            require(msg.value >= totalAmount, "wrong amount");
+
+            RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
+            delete jail[address(this)][tokenId];
+
+            (bool success, ) = msg.sender.call{value: msg.value - totalAmount}("");
+            require(success, "failed");
+
+            emit RedemptionRedCat(msg.sender, tokenId, totalAmount);
+        }
     }
 
     // 確認拋棄
     function confirmAbandon() external {
+        uint256[] memory jailRedCat = RedCat.walletOfOwner(address(this));
+
         for(uint i = 0; i < jailRedCat.length; i++) {
             uint tokenId = jailRedCat[i];
-            if(jail[tokenId].borrowTime >= jailTime) {
-                abandon[tokenId] = jail[tokenId];
-                abandonRedCat.push(tokenId);
-                delete jail[tokenId];
+            
+            if(getAbandomTime(tokenId)) {
+                abandon[address(this)][tokenId] = jail[address(this)][tokenId];
+                delete jail[address(this)][tokenId];
             }
         }
     }
+    
+    // 購買
+    function buyRedCat(uint tokenId) external payable nonReentrant {
+        require(saleOpen, "market not open");
+        uint salePrice = abandon[address(this)][tokenId].salePrice;
+        require(salePrice > 0 && msg.value >= salePrice, "Insufficient expenses");
+ 
+        RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
+        delete abandon[address(this)][tokenId];
+
+        emit BuyRedCat(msg.sender, tokenId, msg.value);
+    }
 
     // onlyOwner
-    function setSalePrice(uint _tokenId, uint _price) external onlyOwner {
-        abandon[_tokenId].salePrice = _price;
+    function setBorrowOpen() external onlyOwner {
+        borrowOpen = !borrowOpen;
     }
 
-    function setBorrowMoney(uint _borrowMoney) external onlyOwner {
-        borrowMoney = _borrowMoney;
+    function setSaleOpen() external onlyOwner {
+        saleOpen = !saleOpen;
     }
 
-    function setRedemptionTime(uint _redemptionTime) external onlyOwner {
-        redemptionTime = _redemptionTime;
+    function setSalePrice(uint tokenId, uint price) external onlyOwner {
+        require(getAbandonTokenOrder(tokenId).borrowAddress != address(0), "not abandon");
+        abandon[address(this)][tokenId].salePrice = price;
     }
 
-    function setJailTime(uint _jailTime) external onlyOwner {
-        jailTime = _jailTime;
+    function setBorrowPrice(uint _borrowPrice) external onlyOwner {
+        borrowPrice = _borrowPrice;
+    }
+
+    function setMintPrice(uint _mintPrice) external onlyOwner {
+        mintPrice = _mintPrice;
     }
 
     function setHoldTime(uint _holdTime) external onlyOwner {
         holdTime = _holdTime;
     }
 
-    function setMerkleRoot(bytes32 _merkleRoot) external onlyOwner {
-        merkleRoot = _merkleRoot;
+    function setRedemptionTime(uint _redemptionTime) external onlyOwner {
+        redemptionTime = _redemptionTime;
+    }
+
+    function setAbandonTime(uint _abandonTime) external onlyOwner {
+        abandonTime = _abandonTime;
     }
 
     function withdrawERC20(address _address, uint _amount) external onlyOwner {
@@ -160,18 +166,31 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
         require(success, "failed");
     }
 
-    // getter
-    function getJailRedCat() external view returns(uint[] memory) {
-        return jailRedCat;
+    function getBalance() public view returns (uint) {
+        return address(this).balance;
     }
 
-    function getAbandonRedCat() external view returns(uint[] memory) {
-        return abandonRedCat;
+    function getRedemptionTime(uint tokenId) public view returns (bool) {
+        return block.timestamp - jail[address(this)][tokenId].borrowTime >= redemptionTime;
     }
 
-    function verify(bytes32[] calldata merkleProof) internal view returns (bool) {
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender));
-        return merkleProof.verify(merkleRoot, leaf);
+    function getAbandomTime(uint tokenId) public view returns (bool) {
+        return block.timestamp - jail[address(this)][tokenId].borrowTime >= abandonTime;
+    }
+
+    function getJailTokenOrder(uint tokenId) public view returns (RedCatOrder memory) {
+        return jail[address(this)][tokenId];
+    }
+
+    function getAbandonTokenOrder(uint tokenId) public view returns (RedCatOrder memory) {
+        return abandon[address(this)][tokenId];
+    }
+
+    function getTotalAmount(uint tokenId) public view returns (uint totalAmount) {
+        require(RedCat.ownerOf(tokenId) == address(this), "not yours");
+        RedCatOrder memory redCatOrder = getJailTokenOrder(tokenId);
+        totalAmount = (mintPrice - redCatOrder.borrowMoney) / (abandonTime - redemptionTime) * (block.timestamp - (redCatOrder.borrowTime + redemptionTime)) 
+            + redCatOrder.borrowMoney;
     }
 
     function onERC721Received(address, address, uint, bytes calldata) external pure returns (bytes4) {

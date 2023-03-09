@@ -7,6 +7,7 @@ interface IRedCat {
     function getBuyTime(uint tokenId) external view returns (uint, uint);
     function getBan(uint tokenId) external view returns (uint, bool);
     function balanceOf(address owner) external view returns (uint256 balance);
+    function walletOfOwner(address _owner) external view returns(uint256[] memory);
     function safeTransferFrom(address from, address to, uint256 tokenId) external;
 
 }
