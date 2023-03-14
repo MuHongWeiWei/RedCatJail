@@ -23,9 +23,12 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
     bool public borrowOpen = false;
     uint public borrowPrice = 0.2 ether;
     uint public mintPrice = 0.3 ether;
-    uint public holdTime = 60 days;
-    uint public redemptionTime = 90 days;
-    uint public abandonTime = 180 days;
+    uint public holdTime = 1 minutes;
+    uint public redemptionTime = 5 minutes;
+    uint public abandonTime = 10 minutes;
+    // uint public holdTime = 60 days;
+    // uint public redemptionTime = 90 days;
+    // uint public abandonTime = 180 days;
 
     mapping(address => mapping(uint tokenId => RedCatOrder)) jail;
     mapping(address => mapping(uint tokenId => RedCatOrder)) abandon;
