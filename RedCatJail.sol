@@ -23,12 +23,9 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
     bool public borrowOpen = false;
     uint public borrowPrice = 0.2 ether;
     uint public mintPrice = 0.3 ether;
-    uint public holdTime = 1 minutes;
-    uint public redemptionTime = 5 minutes;
-    uint public abandonTime = 10 minutes;
-    // uint public holdTime = 60 days;
-    // uint public redemptionTime = 90 days;
-    // uint public abandonTime = 180 days;
+    uint public holdTime = 60 days;
+    uint public redemptionTime = 90 days;
+    uint public abandonTime = 180 days;
 
     mapping(address => mapping(uint tokenId => RedCatOrder)) jail;
     mapping(address => mapping(uint tokenId => RedCatOrder)) abandon;
@@ -65,36 +62,44 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
 
             (bool success, ) = msg.sender.call{value: borrowPrice}("");
             require(success, "failed");
-           
+
             emit BorrowMoney(msg.sender, borrowPrice, tokenId);
         }
     }
 
-    function redemptionRedCat(uint tokenId) external payable {
-        RedCatOrder memory redCatOrder = jail[address(this)][tokenId];
-        require(redCatOrder.borrowAddress == msg.sender, "not yours");
-        require(!getAbandomTime(tokenId), "has been abandoned");
+    function redemptionRedCat(uint[] calldata tokenIds) external payable {
+        for(uint i = 0; i < tokenIds.length; i++) {
+            uint tokenId = tokenIds[i];
+            RedCatOrder memory redCatOrder = jail[address(this)][tokenId];
+            require(redCatOrder.borrowAddress == msg.sender, "not yours");
+            require(!getAbandomTime(tokenId), "has been abandoned");
+            require(!getRedemptionTime(tokenId), "has been overRedemption");
 
-        if(!getRedemptionTime(tokenId)) {
-            require(msg.value >= redCatOrder.borrowMoney, "wrong amount");
+            require(msg.value / tokenIds.length >= redCatOrder.borrowMoney, "wrong amount");
 
             RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
             delete jail[address(this)][tokenId];
 
             emit RedemptionRedCat(msg.sender, tokenId, redCatOrder.borrowMoney);
-        } else {
-            uint totalAmount = getTotalAmount(tokenId);
-            
-            require(msg.value >= totalAmount, "wrong amount");
-
-            RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
-            delete jail[address(this)][tokenId];
-
-            (bool success, ) = msg.sender.call{value: msg.value - totalAmount}("");
-            require(success, "failed");
-
-            emit RedemptionRedCat(msg.sender, tokenId, totalAmount);
         }
+    }
+
+    function overRedemptionRedCat(uint tokenId) external payable {
+        RedCatOrder memory redCatOrder = jail[address(this)][tokenId];
+        require(redCatOrder.borrowAddress == msg.sender, "not yours");
+        require(!getAbandomTime(tokenId), "has been abandoned");
+        require(getRedemptionTime(tokenId), "not overRedemption");
+
+        uint totalAmount = getTotalAmount(tokenId);
+        require(msg.value >= totalAmount, "wrong amount");
+
+        RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
+        delete jail[address(this)][tokenId];
+
+        (bool success, ) = msg.sender.call{value: msg.value - totalAmount}("");
+        require(success, "failed");
+
+        emit RedemptionRedCat(msg.sender, tokenId, totalAmount);
     }
 
     function confirmAbandon() external {
@@ -102,19 +107,19 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
 
         for(uint i = 0; i < jailRedCat.length; i++) {
             uint tokenId = jailRedCat[i];
-            
+
             if(getAbandomTime(tokenId)) {
                 abandon[address(this)][tokenId] = jail[address(this)][tokenId];
                 delete jail[address(this)][tokenId];
             }
         }
     }
-    
+
     function buyRedCat(uint tokenId) external payable nonReentrant {
         require(saleOpen, "market not open");
         uint salePrice = abandon[address(this)][tokenId].salePrice;
         require(salePrice > 0 && msg.value >= salePrice, "Insufficient expenses");
- 
+
         RedCat.safeTransferFrom(address(this), msg.sender, tokenId);
         delete abandon[address(this)][tokenId];
 
@@ -188,8 +193,7 @@ contract RedCatJail is Ownable, IERC721TokenReceiver, ReentrancyGuard {
     function getTotalAmount(uint tokenId) public view returns (uint totalAmount) {
         require(RedCat.ownerOf(tokenId) == address(this), "not yours");
         RedCatOrder memory redCatOrder = getJailTokenOrder(tokenId);
-        totalAmount = (mintPrice - redCatOrder.borrowMoney) / (abandonTime - redemptionTime) * (block.timestamp - (redCatOrder.borrowTime + redemptionTime)) 
-            + redCatOrder.borrowMoney;
+        totalAmount = (mintPrice - redCatOrder.borrowMoney) / (abandonTime - redemptionTime) * (block.timestamp - (redCatOrder.borrowTime + redemptionTime)) + redCatOrder.borrowMoney;
     }
 
     function onERC721Received(address, address, uint, bytes calldata) external pure returns (bytes4) {
